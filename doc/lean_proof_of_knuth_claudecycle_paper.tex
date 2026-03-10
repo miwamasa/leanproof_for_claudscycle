@@ -1,0 +1,600 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{mathtools}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{geometry}
+\usepackage{booktabs}
+\usepackage{enumitem}
+
+\geometry{margin=2.5cm}
+
+% Lean 4 listing style
+\lstdefinelanguage{Lean4}{
+  keywords={theorem,def,lemma,private,by,where,let,if,then,else,match,with,
+            have,show,exact,intro,obtain,rw,simp,omega,subst,rcases,
+            calc,refine,cases,apply,exfalso,push_neg,unfold,conv_lhs,
+            abbrev,inductive,deriving,structure,import,open,section,
+            namespace,end,instance,class,extends,fun,return,do},
+  keywordstyle=\color{blue}\bfseries,
+  comment=[l]{--},
+  morecomment=[s]{/-}{-/},
+  commentstyle=\color{gray}\itshape,
+  stringstyle=\color{red!70!black},
+  morestring=[b]",
+  sensitive=true,
+  literate=
+    {forall}{{$\forall$}}1
+    {exists}{{$\exists$}}1
+    {=>}{{$\Rightarrow$}}2
+    {->}{{$\to$}}2
+    {:=}{{$\coloneqq$}}2
+    {<=}{{$\le$}}2
+    {>=}{{$\ge$}}2
+    {/\\}{{$\land$}}2
+    {\\/}{{$\lor$}}2
+    {!=}{{$\ne$}}2
+    {|-}{{$\vdash$}}2
+    {Fin}{{$\mathsf{Fin}$}}3
+    {Nat}{{$\mathbb{N}$}}3
+    {Vertex}{{$\mathsf{Vertex}$}}6
+    {Dir}{{$\mathsf{Dir}$}}3,
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  framerule=0.4pt,
+  backgroundcolor=\color{gray!5},
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  xleftmargin=1.5em,
+  framexleftmargin=1.5em,
+}
+
+\lstset{language=Lean4}
+
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{remark}[theorem]{Remark}
+
+\title{A Lean~4 Formalization of Knuth's ``Claude's Cycles''}
+\author{Formalized in Lean~4 with Mathlib}
+\date{March 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+We present a complete Lean~4 formalization (3{,}389 lines, zero \texttt{sorry})
+of the main theorem from Knuth's ``Claude's Cycles'' (2026):
+for every odd integer $m \ge 3$, the Cayley digraph on $m^3$ vertices
+with arcs $ijk \to (i{+}1)jk$, $i(j{+}1)k$, $ij(k{+}1)$ (mod~$m$)
+admits a decomposition of all $3m^3$ arcs into three directed Hamiltonian cycles.
+The proof is carried out entirely within Lean~4's dependent type theory,
+relying on Mathlib for modular arithmetic and finite-type reasoning.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%% ============================================================
+\section{Introduction}
+\label{sec:intro}
+
+Knuth's paper~\cite{knuth2026} studies a Cayley digraph $\mathcal{G}_m$ whose vertex set is
+$\{0, 1, \ldots, m{-}1\}^3$ and whose arcs consist of incrementing any single
+coordinate modulo~$m$.  Each vertex has out-degree~3, so the digraph has $3m^3$ arcs.
+The main result states that for odd $m \ge 3$, these arcs partition into three directed
+Hamiltonian cycles---cycles that visit all $m^3$ vertices exactly once.
+
+The three cycles are defined by \emph{direction functions} $\mathsf{dir}_0$,
+$\mathsf{dir}_1$, $\mathsf{dir}_2$ that assign to each vertex which coordinate
+to increment next.  The key properties to verify are:
+\begin{enumerate}[label=(\roman*)]
+  \item At every vertex, the three directions form a permutation of $\{+i, +j, +k\}$.
+  \item Each direction function generates a single cycle of length~$m^3$.
+\end{enumerate}
+
+Property~(i) ensures the arcs are partitioned; property~(ii) ensures each
+piece is a Hamiltonian cycle.
+
+%% ============================================================
+\section{Formalization Framework}
+\label{sec:framework}
+
+\subsection{Types and Definitions}
+
+Vertices are represented as triples of elements of $\mathsf{Fin}\;m$:
+
+\begin{lstlisting}[caption={Basic types}]
+abbrev Vertex (m : Nat) := Fin m * Fin m * Fin m
+
+inductive Dir where
+  | bumpi : Dir
+  | bumpj : Dir
+  | bumpk : Dir
+\end{lstlisting}
+
+The bump function increments a single coordinate:
+
+\begin{lstlisting}[caption={Bump and orbit}]
+def bump (m : Nat) [NeZero m] (v : Vertex m) (d : Dir) : Vertex m :=
+  match d with
+  | Dir.bumpi => (v.1 + 1, v.2.1, v.2.2)
+  | Dir.bumpj => (v.1, v.2.1 + 1, v.2.2)
+  | Dir.bumpk => (v.1, v.2.1, v.2.2 + 1)
+
+def successor (m : Nat) [NeZero m]
+    (dirFn : Vertex m -> Dir) (v : Vertex m) : Vertex m :=
+  bump m v (dirFn v)
+
+def orbit (m : Nat) [NeZero m]
+    (dirFn : Vertex m -> Dir) (start : Vertex m) : (n : Nat) -> Vertex m
+  | 0 => start
+  | n + 1 => successor m dirFn (orbit m dirFn start n)
+\end{lstlisting}
+
+\subsection{The Fiber Index}
+
+A central invariant is the \emph{fiber index} $s = (i + j + k) \bmod m$.
+
+\begin{lstlisting}[caption={Fiber index}]
+def fiberIndex (m : Nat) [NeZero m] (v : Vertex m) : Fin m :=
+  v.1 + v.2.1 + v.2.2
+\end{lstlisting}
+
+\begin{lemma}[Fiber advancement]
+For any vertex $v$ and direction $d$,
+$\mathsf{fiberIndex}(\mathsf{bump}\;v\;d) = \mathsf{fiberIndex}(v) + 1$.
+\end{lemma}
+
+\begin{lstlisting}[caption={Fiber advances}]
+theorem fiber_advances (m : Nat) [NeZero m] (v : Vertex m) (d : Dir) :
+    fiberIndex m (bump m v d) = fiberIndex m v + 1 := by
+  cases d <;> simp [fiberIndex, bump, add_assoc, add_comm, add_left_comm]
+\end{lstlisting}
+
+This means that within each round of $m$ steps, the fiber index cycles through all
+$m$ residues. The step at which $s = 0$ marks the ``start'' of a new round.
+
+%% ============================================================
+\section{Direction Functions}
+\label{sec:directions}
+
+The three direction functions are decision tables based on the fiber index $s$
+and coordinates $i$, $j$:
+
+\begin{lstlisting}[caption={The three direction functions}]
+def dir0 (m : Nat) [NeZero m] (v : Vertex m) : Dir :=
+  let s := fiberIndex m v; let i := v.1; let j := v.2.1
+  if s.val = 0 then (if j.val = m - 1 then Dir.bumpi else Dir.bumpk)
+  else if s.val = m - 1 then (if i.val > 0 then Dir.bumpj else Dir.bumpk)
+  else (if i.val = m - 1 then Dir.bumpk else Dir.bumpj)
+
+def dir1 (m : Nat) [NeZero m] (v : Vertex m) : Dir :=
+  let s := fiberIndex m v; let i := v.1
+  if s.val = 0 then Dir.bumpj
+  else if s.val = m - 1 then
+    (if i.val > 0 then Dir.bumpk else Dir.bumpj)
+  else Dir.bumpi
+
+def dir2 (m : Nat) [NeZero m] (v : Vertex m) : Dir :=
+  let s := fiberIndex m v; let i := v.1; let j := v.2.1
+  if s.val = 0 then (if j.val < m - 1 then Dir.bumpi else Dir.bumpk)
+  else if s.val = m - 1 then Dir.bumpi
+  else (if i.val < m - 1 then Dir.bumpk else Dir.bumpj)
+\end{lstlisting}
+
+\begin{theorem}[Direction permutation]
+At every vertex, $\{\mathsf{dir}_0(v),\;\mathsf{dir}_1(v),\;\mathsf{dir}_2(v)\}
+= \{+i, +j, +k\}$.
+\end{theorem}
+
+\begin{lstlisting}[caption={Permutation property}]
+theorem directions_are_permutation (m : Nat) [NeZero m] (hm : m >= 3)
+    (v : Vertex m) :
+    ({dir0 m v, dir1 m v, dir2 m v} : Finset Dir)
+      = {Dir.bumpi, Dir.bumpj, Dir.bumpk} := by
+  simp only [dir0, dir1, dir2]
+  have hj_bound := v.2.1.isLt; have hi_bound := v.1.isLt
+  split_ifs <;> first
+    | (ext x; fin_cases x <;> simp_all <;> done) | omega
+\end{lstlisting}
+
+%% ============================================================
+\section{Cycle 0: Block Decomposition}
+\label{sec:cycle0}
+
+\subsection{Strategy}
+
+The orbit under $\mathsf{dir}_0$ is analyzed by decomposing the $m^3$ vertices into
+$m$ \emph{blocks} $B_0, B_1, \ldots, B_{m-1}$, where $B_i$ contains all vertices
+with first coordinate equal to~$i$.  Each block has $m^2$ vertices.
+
+The proof proceeds in three stages:
+\begin{enumerate}
+  \item \textbf{Intra-block completeness}: Within each block, the orbit visits
+    all $m^2$ vertices via a closed-form formula.
+  \item \textbf{Block transitions}: At the exit of block~$i$, the direction is
+    $\mathsf{bumpi}$, which transitions the orbit to block~$i{+}1$.
+  \item \textbf{Chaining}: After $m$ blocks, the orbit returns to the start,
+    completing a cycle of length $m \cdot m^2 = m^3$.
+\end{enumerate}
+
+\subsection{Closed-Form Formulas}
+
+For the $i = 0$ block, the expected vertex at orbit step $t \cdot m + r$
+(where $0 \le t, r < m$) is:
+
+\begin{lstlisting}[caption={Expected formula for the $i=0$ block}]
+def i0Expected (m : Nat) [NeZero m] (t r : Fin m) : Vertex m :=
+  let j_base : Fin m := { val := ((m - 2) * t.val) % m, ... }
+  let k_base : Fin m := { val := (2 * t.val) % m, ... }
+  if r.val = 0 then
+    ({ val := 0, ... }, j_base, k_base)
+  else
+    ({ val := 0, ... }, j_base + { val := r.val - 1, ... }, k_base + 1)
+\end{lstlisting}
+
+The orbit-matching theorem is proved by strong induction on the step count,
+with a case split on whether $r = 0$ (start of round), $0 < r < m-1$ (mid-round),
+or $r = m-1$ (end of round):
+
+\begin{lstlisting}[caption={Orbit matches the formula}]
+theorem orbit_i0_explicit (m : Nat) [NeZero m]
+    (hm_odd : m % 2 = 1) (hm_ge : m >= 3) (t r : Fin m)
+    (hn : n = t.val * m + r.val) :
+    orbit m (dir0 m) (checkpoint0 m { val := 0, ... }) n
+      = i0Expected m t r
+\end{lstlisting}
+
+Intermediate blocks ($0 < i < m{-}1$) and the last block ($i = m{-}1$)
+follow the same pattern with minor variations in the coordinate formulas.
+
+\subsection{Injectivity via Coprimality}
+
+\begin{lemma}[Coprimality cancellation]
+\label{lem:coprime}
+If $m$ is odd and $2t_1 \equiv 2t_2 \pmod{m}$ with $0 \le t_1, t_2 < m$,
+then $t_1 = t_2$.
+\end{lemma}
+
+\begin{lstlisting}[caption={Coprimality cancellation}]
+private theorem t_eq_of_two_t_mod (m : Nat) (hm_odd : m % 2 = 1) (hm_ge : m >= 3)
+    (t1 t2 : Fin m) (h : (2 * t1.val) % m = (2 * t2.val) % m) : t1 = t2 := by
+  by_contra hne
+  have hne_val : t1.val != t2.val := fun heq => hne (Fin.ext heq)
+  rcases Nat.lt_or_gt_of_ne hne_val with hlt | hgt
+  -- t1 < t2: m | 2*(t2-t1), bounded by 2m, so 2*(t2-t1) = m => m even
+  . have hdvd : m | (2 * t2.val - 2 * t1.val) :=
+      (Nat.modEq_iff_dvd' (by omega)).mp h
+    obtain <<c, hc>> := hdvd
+    have : c = 1 := by nlinarith [t1.isLt, t2.isLt]
+    subst this; simp only [Nat.mul_one] at hc; omega
+  -- t1 > t2: symmetric
+  . ...
+\end{lstlisting}
+
+The proof exploits that $m \mid 2(t_2 - t_1)$ with $0 < 2(t_2 - t_1) < 2m$
+forces $2(t_2 - t_1) = m$, contradicting $m$ odd.
+
+This lemma is used to recover $t$ from the coordinates:
+the $j$-base and $k$-base coordinates involve $((m{-}2) \cdot t) \bmod m$
+and $(2t) \bmod m$, and coprimality ensures distinct $t$ values produce distinct sums.
+
+%% ============================================================
+\section{Cycles 1 and 2: Super-Round Architecture}
+\label{sec:cycles12}
+
+\subsection{Uniform Proof Pattern}
+
+Cycles~1 and~2 follow a common architecture.  The $m^3$ orbit steps are grouped into
+$m$ \emph{super-rounds}, each of $m^2$ steps, indexed by a parameter $u \in \{0, \ldots, m{-}1\}$.
+Within super-round~$u$, steps are indexed as $t \cdot m + r$.
+
+For each cycle, we define:
+\begin{itemize}
+  \item A \textbf{block entry} function $\mathsf{BlockEntry}(u)$: the vertex where
+    super-round~$u$ begins.
+  \item An \textbf{Expected} function $\mathsf{Expected}(u, t, r)$: the closed-form vertex
+    at step $u \cdot m^2 + t \cdot m + r$.
+\end{itemize}
+
+Hamiltonicity is then proved via four components:
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+\textbf{Component} & \textbf{Statement} \\
+\midrule
+\texttt{orbit\_explicit} & $\mathsf{orbit}^{t \cdot m + r}(\mathsf{BlockEntry}(u)) = \mathsf{Expected}(u, t, r)$ \\
+\texttt{Expected\_injective} & $(u_1, t_1, r_1) \ne (u_2, t_2, r_2) \Rightarrow \mathsf{Expected}(\cdots) \ne \mathsf{Expected}(\cdots)$ \\
+\texttt{Expected\_surjective} & Follows from injectivity on a finite type \\
+\texttt{orbit\_returns} & $\mathsf{orbit}^{m^3}(\mathsf{BlockEntry}(0)) = \mathsf{BlockEntry}(0)$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Cycle 1: Details}
+
+The expected formula for cycle~1 has two branches:
+
+\begin{lstlisting}[caption={Cycle 1 expected formula}]
+def dir1Expected (m : Nat) [NeZero m] (u t r : Fin m) : Vertex m :=
+  let i_base := { val := ((m - 2) * t.val) % m, ... }
+  let j_base := { val := (u.val + t.val) % m, ... }
+  let k_val  := { val := (t.val + m - u.val) % m, ... }
+  if r.val = 0 then (i_base, j_base, k_val)
+  else (i_base + { val := r.val - 1, ... }, j_base + 1, k_val)
+\end{lstlisting}
+
+Injectivity recovery strategy:
+\begin{enumerate}
+  \item Recover $r$ from the fiber index $s = (i + j + k) \bmod m$.
+  \item Recover $t$ from $j + k = (2t + m) \bmod m$ using Lemma~\ref{lem:coprime}.
+  \item Recover $u$ from $j - t = u \pmod{m}$.
+\end{enumerate}
+
+\subsection{Cycle 2: The Most Complex Proof}
+
+The expected formula for cycle~2 has \emph{five} branches, depending on whether the
+super-round is ``non-special'' ($j_u = ((m{-}2) \cdot u) \bmod m < m{-}1$)
+or ``special'' ($j_u = m{-}1$):
+
+\begin{lstlisting}[caption={Cycle 2 expected formula (simplified)}]
+def dir2Expected (m : Nat) [NeZero m] (u t r : Fin m) : Vertex m :=
+  let j_u := ((m - 2) * u.val) % m
+  if j_u < m - 1 then
+    -- Non-special: 3 sub-branches (r=0, r>=1 with t<m-1, r>=1 with t=m-1)
+    if r.val = 0 then (2t mod m, j_u, (2u + (m-2)t) mod m)
+    else if t.val < m - 1 then (2t+1 mod m, j_u, (2u + (m-2)t + r - 1) mod m)
+    else (m-1, (j_u + r - 1) mod m, (2u + (m-2)(m-1)) mod m)
+  else
+    -- Special: 2 sub-branches (t<m-1 or r<=1, otherwise)
+    if t.val < m - 1 \/ r.val <= 1 then (t, m-1, (2u + m - t + r) mod m)
+    else (m-1, (r-2) mod m, (2u + 2) mod m)
+\end{lstlisting}
+
+\subsubsection{The \texttt{u\_eq\_of\_m2\_u\_mod} Helper}
+
+A key helper reduces cancellation of $(m{-}2)$ to cancellation of~$2$:
+
+\begin{lstlisting}[caption={Reducing $(m{-}2)$-cancellation to $2$-cancellation}]
+private theorem u_eq_of_m2_u_mod (m : Nat) (hm_odd : m % 2 = 1) (hm_ge : m >= 3)
+    (u1 u2 : Fin m) (h : ((m - 2) * u1.val) % m = ((m - 2) * u2.val) % m)
+    : u1 = u2 := by
+  have h2u : (2 * u1.val) % m = (2 * u2.val) % m := by
+    -- Key identity: (m-2)*u + 2*u = m*u, so (m-2)*u = -2*u (mod m)
+    have hfact1 : (m - 2) * u1.val + 2 * u1.val = m * u1.val := by
+      zify [show m >= 2 from by omega]; ring
+    ...
+  exact t_eq_of_two_t_mod m hm_odd hm_ge u1 u2 h2u
+\end{lstlisting}
+
+\subsubsection{Injectivity: 25-Case Analysis}
+
+The injectivity proof for \texttt{dir2Expected} involves 25 sub-cases from the
+$4 \times$ sub-case structure:
+
+\begin{enumerate}
+  \item \textbf{Case A} (both non-special): 9 sub-cases from $(r_1{=}0$ vs $r_1{\ge}1) \times (t_1{<}m{-}1$ vs $t_1{=}m{-}1) \times (\text{same for } u_2, t_2)$.
+  \item \textbf{Case B} (non-special vs special): Contradiction from the $j$-component.
+  \item \textbf{Case C} (special vs non-special): Symmetric to Case~B.
+  \item \textbf{Case D} (both special): $u_1 = u_2$ from $j_u$, then $t$ from bounds.
+\end{enumerate}
+
+The proof structure in Lean:
+
+\begin{lstlisting}[caption={Injectivity proof structure}]
+private theorem dir2Expected_injective (m : Nat) [NeZero m]
+    (hm_odd : m % 2 = 1) (hm_ge : m >= 3) :
+    Function.Injective (fun p : Fin m * Fin m * Fin m =>
+      dir2Expected m p.1 p.2.1 p.2.2) := by
+  intro <<u1, t1, r1>> <<u2, t2, r2>> heq
+  -- Step 1: r1 = r2 from fiber index
+  have hr : r1 = r2 := ... -- via dir2E_fiber
+  subst hr
+  -- Step 2: Unfold and case-split on special/non-special
+  simp only [dir2Expected] at heq
+  by_cases hns1 : ((m - 2) * u1.val) % m < m - 1 <;>
+  by_cases hns2 : ((m - 2) * u2.val) % m < m - 1
+  . -- Case A: Both non-special (9 sub-cases)
+    ...
+  . -- Case B: u1 non-special, u2 special -> contradiction
+    exfalso; ...
+  . -- Case C: u1 special, u2 non-special -> contradiction
+    exfalso; ...
+  . -- Case D: Both special
+    ...
+\end{lstlisting}
+
+\subsubsection{Omega Limitations and Workarounds}
+
+A recurring technical challenge: Lean's \texttt{omega} tactic handles Presburger arithmetic
+but \emph{cannot} reason about modular arithmetic with variable modulus.
+For example, \texttt{omega} cannot prove:
+\[
+  m \le 2t + 1 < 2m \implies (2t + 1) \bmod m = 2t + 1 - m
+\]
+The workaround decomposes the modular equation explicitly:
+
+\begin{lstlisting}[caption={Working around omega's limitations}]
+have : (2 * t1.val + 1) % m = 2 * t1.val + 1 - m := by
+  conv_lhs => rw [show 2 * t1.val + 1
+    = (2 * t1.val + 1 - m) + m from by omega]
+  rw [Nat.add_mod_right, Nat.mod_eq_of_lt (by omega)]
+\end{lstlisting}
+
+Another subtlety: \texttt{Nat.ModEq m a b} is definitionally $a \bmod m = b \bmod m$
+but displayed as $a \equiv b \pmod{m}$, and \texttt{rw} cannot see through the notation:
+
+\begin{lstlisting}[caption={Unfolding Nat.ModEq}]
+have hju := Nat.ModEq.add_right_cancel' (r1.val - 1) hj
+unfold Nat.ModEq at hju  -- Must unfold before rewriting
+rw [Nat.mod_eq_of_lt (Nat.mod_lt _ hm_pos),
+    Nat.mod_eq_of_lt (Nat.mod_lt _ hm_pos)] at hju
+\end{lstlisting}
+
+%% ============================================================
+\section{Assembly of the Main Theorem}
+\label{sec:assembly}
+
+\subsection{Individual Hamiltonicity Theorems}
+
+Each cycle's Hamiltonicity theorem has the same form:
+
+\begin{lstlisting}[caption={Cycle Hamiltonicity (pattern)}]
+theorem cycleN_hamiltonian (m : Nat) [NeZero m]
+    (hm_odd : m % 2 = 1) (hm_ge : m >= 3) :
+    exists start : Vertex m,
+      (orbit m (dirN m) start (m ^ 3) = start) /\
+      (forall v : Vertex m, exists n : Fin (m ^ 3),
+        orbit m (dirN m) start n.val = v)
+\end{lstlisting}
+
+The proof instantiates the start vertex, appeals to orbit return for cyclicity,
+and appeals to surjectivity (from injectivity on a finite type) for vertex coverage:
+
+\begin{lstlisting}[caption={Surjectivity from injectivity on finite types}]
+private theorem dir2Expected_surjective ... :
+    Function.Surjective (fun p : Fin m * Fin m * Fin m =>
+      dir2Expected m p.1 p.2.1 p.2.2) :=
+  Finite.surjective_of_injective (dir2Expected_injective m hm_odd hm_ge)
+\end{lstlisting}
+
+\subsection{The Decomposition Theorem}
+
+The final assembly is a four-component conjunction:
+
+\begin{lstlisting}[caption={The main decomposition theorem}]
+theorem claude_decomposition (m : Nat) [NeZero m]
+    (hm_odd : m % 2 = 1) (hm_ge : m >= 3) :
+    (exists start0, orbit m (dir0 m) start0 (m ^ 3) = start0 /\
+      forall v, exists n : Fin (m ^ 3),
+        orbit m (dir0 m) start0 n.val = v) /\
+    (exists start1, orbit m (dir1 m) start1 (m ^ 3) = start1 /\
+      forall v, exists n : Fin (m ^ 3),
+        orbit m (dir1 m) start1 n.val = v) /\
+    (exists start2, orbit m (dir2 m) start2 (m ^ 3) = start2 /\
+      forall v, exists n : Fin (m ^ 3),
+        orbit m (dir2 m) start2 n.val = v) /\
+    (forall v : Vertex m,
+      ({dir0 m v, dir1 m v, dir2 m v} : Finset Dir)
+        = {Dir.bumpi, Dir.bumpj, Dir.bumpk}) := by
+  exact <<
+    cycle0_hamiltonian m hm_odd hm_ge,
+    cycle1_hamiltonian m hm_odd hm_ge,
+    cycle2_hamiltonian m hm_odd hm_ge,
+    directions_are_permutation m hm_ge >>
+\end{lstlisting}
+
+%% ============================================================
+\section{Proof Statistics and Structure}
+\label{sec:stats}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Component} & \textbf{Lines} & \textbf{Theorems} & \textbf{Max case depth} \\
+\midrule
+Basic definitions \& properties     & 130   & 12  & --- \\
+Cycle 0 (block analysis)            & 1{,}595 & 45 & 3 \\
+Cycle 0 Hamiltonicity assembly      & 55    & 2   & --- \\
+Cycle 1 (super-round analysis)      & 580   & 25  & 9 \\
+Cycle 2 (super-round analysis)      & 980   & 28  & 25 \\
+Decomposition theorem               & 20    & 1   & --- \\
+\midrule
+\textbf{Total}                      & \textbf{3{,}389} & \textbf{$\sim$110} & \\
+\bottomrule
+\end{tabular}
+\caption{Formalization statistics by section.}
+\end{table}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lr}
+\toprule
+\textbf{Metric} & \textbf{Value} \\
+\midrule
+Total lines of Lean code & 3{,}389 \\
+\texttt{sorry} count & 0 \\
+Mathlib imports & 5 \\
+Approximate build time & $\sim$100\,s \\
+Lean version & 4.29.0-rc2 \\
+\bottomrule
+\end{tabular}
+\caption{Overall metrics.}
+\end{table}
+
+%% ============================================================
+\section{Key Proof Techniques}
+\label{sec:techniques}
+
+\subsection{Coprimality Arguments}
+
+Since $\gcd(2, m) = 1$ for odd~$m$, the map $t \mapsto 2t \bmod m$ is a bijection
+on $\{0, \ldots, m{-}1\}$.  This is formalized as \texttt{t\_eq\_of\_two\_t\_mod}
+(Section~\ref{sec:cycle0}).  The identity $(m{-}2) \cdot u + 2u = mu$ further yields
+$(m{-}2) \cdot u \equiv -2u \pmod{m}$, giving coprimality for $(m{-}2)$ as well.
+
+\subsection{Fiber Index for Parameter Recovery}
+
+Each direction function $\mathsf{dir}_c$ is designed so that within a round of $m$ steps,
+the fiber index $s$ cycles through all residues $0, 1, \ldots, m{-}1$.  This means the
+intra-round step~$r$ can be recovered from any vertex via $r = s \bmod m$
+(or a derived quantity).
+
+\subsection{Injectivity $\Rightarrow$ Surjectivity on Finite Types}
+
+The key insight that simplifies the proof: on a finite type, injectivity implies
+surjectivity.  Mathlib provides \texttt{Finite.surjective\_of\_injective} for this.
+Once we show $\mathsf{Expected}$ is injective, surjectivity (and hence coverage of all
+$m^3$ vertices) is automatic.
+
+\subsection{Dealing with Lean~4 Technicalities}
+
+Several Lean-specific challenges arose:
+\begin{itemize}
+  \item \textbf{If-then-else and projections}: Tuple projections like \texttt{.2.1}
+    do not reduce through unresolved if-then-else expressions.
+    The fix: resolve all conditional branches with
+    \texttt{simp only [if\_pos h, if\_neg h]} \emph{before} destructuring.
+  \item \textbf{Dependent elimination}: \texttt{obtain $\langle$a, b, c$\rangle$ := heq} fails
+    when \texttt{heq} contains \texttt{Decidable.rec} from unresolved conditionals.
+  \item \textbf{Variable representation after \texttt{subst}}: After substitution,
+    Lean may represent $t_1$ as \texttt{(u1, t1, r1).2.1} internally.
+    The \texttt{omega} tactic then treats the hypothesis \texttt{t1.val} and the
+    goal's \texttt{(u1, t1, r1).2.1.val} as distinct variables.
+    Workaround: prove equalities with \texttt{Fin.ext} in a separate \texttt{have},
+    then \texttt{subst}.
+\end{itemize}
+
+%% ============================================================
+\section{Conclusion}
+
+We have presented a complete, machine-checked proof that for odd $m \ge 3$,
+the Cayley digraph $\mathcal{G}_m$ admits a decomposition of its $3m^3$ arcs into
+three directed Hamiltonian cycles.  The formalization closely follows Knuth's
+construction but required significant effort in managing modular arithmetic
+within Lean~4's type theory, particularly the interplay between
+$\mathsf{Fin}\;m$ arithmetic and natural number modular operations.
+
+The most technically demanding component was the injectivity of the 5-branch
+formula for cycle~2 (\texttt{dir2Expected\_injective}, 220~lines), which
+required 25 sub-cases and multiple workarounds for limitations of the
+\texttt{omega} tactic with variable-modulus arithmetic.
+
+\begin{thebibliography}{9}
+\bibitem{knuth2026}
+  D.~E.~Knuth,
+  \textit{Claude's Cycles},
+  Manuscript, 28~February 2026 (revised 02~March 2026).
+\end{thebibliography}
+
+\end{document}

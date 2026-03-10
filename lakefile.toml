@@ -1,0 +1,23 @@
+name = "knuth"
+version = "0.1.0"
+keywords = ["math"]
+defaultTargets = ["ClaudeCycles"]
+
+[leanOptions]
+pp.unicode.fun = true
+relaxedAutoImplicit = false
+maxSynthPendingDepth = 3
+
+[[require]]
+name = "mathlib"
+scope = "leanprover-community"
+rev = "v4.29.0-rc2"
+
+[[lean_lib]]
+name = "ClaudeCycles"
+
+[[lean_lib]]
+name = "Lemmas"
+
+[[lean_lib]]
+name = "Challenge"

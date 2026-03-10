@@ -1,0 +1,27 @@
+# Lake build artifacts
+.lake/
+lake-packages/
+
+# Editor/IDE
+.vscode/
+*.olean
+
+# Claude Code working directory
+.claude/
+
+# Archives
+*.zip
+
+# OS
+.DS_Store
+Thumbs.db
+
+# LaTeX build artifacts
+doc/*.aux
+doc/*.log
+doc/*.out
+doc/*.pdf
+doc/*.synctex.gz
+doc/*.toc
+doc/*.bbl
+doc/*.blg
