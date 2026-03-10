@@ -25,3 +25,7 @@ doc/*.synctex.gz
 doc/*.toc
 doc/*.bbl
 doc/*.blg
+
+Lemmas.lean
+証明解説.md
+
