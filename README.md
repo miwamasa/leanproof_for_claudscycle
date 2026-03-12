@@ -3,9 +3,11 @@
 A complete formal verification in Lean 4 of the main theorem from Don Knuth's paper
 **"Claude's Cycles"** (28 Feb 2026; revised 02 Mar 2026).
 
-The proof is made with Claude Opus4.6 and with help of [lean4-skill](https://github.com/cameronfreer/lean4-skills).
+The proof is made almost automatically by Claude Code with  Opus4.6 and  [lean4-skill](https://github.com/cameronfreer/lean4-skills).
 
 I am a softeware enginner, not a professional mathematician.
+
+I have verified ClaudeCycle.lean with Challenge.lean on the Axiom Math's [Axiom Lean Engine](https://axle.axiommath.ai/), thanks to the generous free use in their playground.
 
 ## Theorem
 
